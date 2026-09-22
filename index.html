@@ -1160,11 +1160,6 @@
       detailTd.colSpan = 6;
 
       var detailWrap = el("div", {class:"reports-detail"});
-      if(r.audioUrl){
-        var listenBtn = el("a", {href:r.audioUrl, target:"_blank", rel:"noopener", class:"add-btn", style:"text-decoration:none; display:inline-flex; margin-bottom:10px;", html:"🔊 낭송 녹음 듣기"});
-        listenBtn.addEventListener("click", function(e){ e.stopPropagation(); });
-        detailWrap.appendChild(listenBtn);
-      }
       detailWrap.appendChild(el("div", {style:"margin-bottom:12px;", html: esc(r.reportText||"")}));
 
       var scores; try{ scores = JSON.parse(r.scoresJson||"[]"); }catch(e){ scores = []; }
@@ -1197,13 +1192,13 @@
   }
 
   function downloadReportsCsv(rows, folderLabel){
-    var header = ["폴더","학번","이름","닉네임","시제목","작가","제출시각","완성도평균(%)","녹음링크","보고서"];
+    var header = ["폴더","학번","이름","닉네임","시제목","작가","제출시각","완성도평균(%)","보고서"];
     var lines = [header.map(csvCell).join(",")];
     rows.forEach(function(r){
       lines.push([
         r.folderName, r.studentId, r.realName, r.nickname, r.poemTitle, r.poemAuthor,
         (r.submittedAt||"").replace("T"," ").slice(0,16),
-        scoreAverage(r.scoresJson), r.audioUrl||"", r.reportText
+        scoreAverage(r.scoresJson), r.reportText
       ].map(csvCell).join(","));
     });
     var csv = "﻿" + lines.join("\r\n"); // BOM so Excel reads 한글 without garbling
