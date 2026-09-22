@@ -895,6 +895,7 @@
 
   var reportsRows = [];
   var reportsFolders = [];
+  var reportsDeadline = ""; // ISO 문자열, 없으면 마감 없음
   var selectedFolder = "__ALL__"; // "__ALL__" | "__NONE__" | 실제 폴더 이름
 
   function callReportsApi(payload){
@@ -912,12 +913,31 @@
   function loadReportsAndFolders(){
     return Promise.all([
       callReportsApi({ action:"listReports" }),
-      callReportsApi({ action:"listFolders" })
+      callReportsApi({ action:"listFolders" }),
+      callReportsApi({ action:"getDeadline" })
     ]).then(function(results){
       reportsRows = Array.isArray(results[0]) ? results[0] : [];
       reportsFolders = Array.isArray(results[1]) ? results[1] : [];
+      reportsDeadline = (results[2] && results[2].deadline) || "";
       renderReportsBox();
     });
+  }
+
+  // <input type="datetime-local">는 로컬 시간의 "YYYY-MM-DDTHH:mm" 형식을
+  // 주고받습니다. UTC(ISO) 문자열과 서로 변환해줍니다.
+  function isoToLocalInputValue(iso){
+    if(!iso) return "";
+    var d = new Date(iso);
+    var pad = function(n){ return (n<10?"0":"")+n; };
+    return d.getFullYear() + "-" + pad(d.getMonth()+1) + "-" + pad(d.getDate()) + "T" + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+  function formatDeadlineDisplay(iso){
+    if(!iso) return "";
+    var d = new Date(iso);
+    var ampm = d.getHours() < 12 ? "오전" : "오후";
+    var h12 = d.getHours() % 12; if(h12===0) h12 = 12;
+    var pad = function(n){ return (n<10?"0":"")+n; };
+    return (d.getMonth()+1) + "월 " + d.getDate() + "일 " + ampm + " " + h12 + ":" + pad(d.getMinutes());
   }
 
   document.getElementById("reportsBtn").addEventListener("click", function(){
@@ -982,6 +1002,48 @@
     btnGroup.appendChild(csvBtn); btnGroup.appendChild(closeBtn);
     head.appendChild(btnGroup);
     box.appendChild(head);
+
+    // ---- 제출 기한 ----
+    var deadlinePanel = el("div", {class:"teacher-panel", style:"margin-bottom:16px;"});
+    var deadlineStatus = el("div", {
+      class:"field-hint",
+      style:"font-weight:700; color:" + (reportsDeadline ? "var(--accent3)" : "var(--ink-soft)") + ";",
+      html: reportsDeadline ? ("⏰ 현재 제출 기한: " + formatDeadlineDisplay(reportsDeadline) + "까지") : "⏰ 아직 제출 기한을 설정하지 않았어요 (언제든 제출 가능)."
+    });
+    deadlinePanel.appendChild(deadlineStatus);
+    var deadlineRow = el("div", {style:"display:flex; gap:8px; flex-wrap:wrap; margin-top:8px;"});
+    var deadlineInput = el("input", {type:"datetime-local", style:"flex:1; min-width:180px;"});
+    deadlineInput.value = isoToLocalInputValue(reportsDeadline);
+    var deadlineSetBtn = el("button", {type:"button", class:"add-btn", html:"⏰ 기한 설정"});
+    deadlineSetBtn.addEventListener("click", function(){
+      if(!deadlineInput.value){ showAlert("날짜와 시간을 선택해주세요."); return; }
+      var localDate = new Date(deadlineInput.value);
+      deadlineSetBtn.disabled = true;
+      callReportsApi({ action:"setDeadline", deadline: localDate.toISOString() }).then(function(res){
+        reportsDeadline = (res && res.deadline) || "";
+        deadlineSetBtn.disabled = false;
+        renderReportsBox();
+      }).catch(function(err){
+        deadlineSetBtn.disabled = false;
+        showAlert((err && err.message) || "기한을 설정하지 못했어요.");
+      });
+    });
+    var deadlineClearBtn = el("button", {type:"button", class:"nav-btn prev", html:"기한 해제"});
+    deadlineClearBtn.addEventListener("click", function(){
+      showConfirm("제출 기한을 없앨까요? 그러면 언제든 제출할 수 있게 돼요.", function(){
+        callReportsApi({ action:"setDeadline", deadline:"" }).then(function(){
+          reportsDeadline = "";
+          renderReportsBox();
+        }).catch(function(err){
+          showAlert((err && err.message) || "기한을 해제하지 못했어요.");
+        });
+      });
+    });
+    deadlineRow.appendChild(deadlineInput);
+    deadlineRow.appendChild(deadlineSetBtn);
+    if(reportsDeadline) deadlineRow.appendChild(deadlineClearBtn);
+    deadlinePanel.appendChild(deadlineRow);
+    box.appendChild(deadlinePanel);
 
     // ---- 폴더 관리 ----
     var folderPanel = el("div", {class:"teacher-panel", style:"margin-bottom:16px;"});
