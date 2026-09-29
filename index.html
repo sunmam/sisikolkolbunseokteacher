@@ -906,6 +906,7 @@
   var reportsRows = [];
   var reportsFolders = []; // 각 항목: {folderId, folderName, createdAt, deadline}
   var selectedFolder = "__ALL__"; // "__ALL__" | "__NONE__" | 실제 폴더 이름
+  var expandedFolders = {}; // folderId -> true면 반 카드가 펼쳐진 상태
 
   function callReportsApi(payload){
     payload.passcode = teacherPasscode;
@@ -1119,14 +1120,25 @@
 
   function buildClassCard(f){
     var card = el("div", {class:"set-card"});
-    var top = el("div", {class:"set-card-top"});
-    top.appendChild(el("span", {html:"🏫 " + esc(f.folderName)}));
+    var expanded = !!expandedFolders[f.folderId];
+
+    var top = el("div", {class:"set-card-top", style:"cursor:pointer; align-items:flex-start;"});
+    var titleCol = el("div", {style:"flex:1; min-width:0;"});
+    var activePoem = f.activePoemId ? sharedPoems.filter(function(p){ return p.id === f.activePoemId; })[0] : null;
+    titleCol.appendChild(el("div", {style:"font-weight:700; font-size:13.5px;", html: (expanded?"▾":"▸") + " 🏫 " + esc(f.folderName)}));
+    titleCol.appendChild(el("div", {
+      class:"field-hint", style:"margin:3px 0 0;",
+      html: activePoem ? ("📢 " + esc(activePoem.title)) : "아직 배포한 시가 없어요"
+    }));
+    top.appendChild(titleCol);
     var delFolderBtn = el("button", {type:"button", class:"remove-x", html:"✕"});
-    delFolderBtn.addEventListener("click", function(){
+    delFolderBtn.addEventListener("click", function(e){
+      e.stopPropagation();
       showConfirm('"' + f.folderName + '" 반을 목록에서 삭제할까요? (이미 제출된 학생 자료는 지워지지 않아요)', function(){
         callReportsApi({ action:"deleteFolder", folderId:f.folderId }).then(function(list){
           reportsFolders = Array.isArray(list) ? list : reportsFolders;
           if(selectedFolder === f.folderName) selectedFolder = "__ALL__";
+          delete expandedFolders[f.folderId];
           renderTeacherBoard();
         }).catch(function(err){
           showAlert((err && err.message) || "반을 삭제하지 못했어요.");
@@ -1134,12 +1146,18 @@
       });
     });
     top.appendChild(delFolderBtn);
+    top.addEventListener("click", function(){
+      expandedFolders[f.folderId] = !expanded;
+      renderTeacherBoard();
+    });
     card.appendChild(top);
+
+    if(!expanded) return card;
 
     // ---- 마감 ----
     card.appendChild(el("div", {
       class:"field-hint",
-      style:"font-weight:700; margin:2px 0 6px; color:" + (f.deadline ? "var(--accent3)" : "var(--ink-soft)") + ";",
+      style:"font-weight:700; margin:10px 0 6px; padding-top:10px; border-top:1px dashed var(--line); color:" + (f.deadline ? "var(--accent3)" : "var(--ink-soft)") + ";",
       html: f.deadline ? ("⏰ 이 반 마감: " + formatDeadlineDisplay(f.deadline) + "까지") : "⏰ 이 반은 아직 마감이 없어요 (언제든 제출 가능)."
     }));
     var dRow = el("div", {style:"display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;"});
@@ -1218,7 +1236,8 @@
         }
         var link = studentLinkFor(app.url, f.folderName);
         var row = el("div", {style:"display:flex; gap:12px; align-items:flex-start; margin-bottom:10px; flex-wrap:wrap;"});
-        var qrImg = el("img", {src:"https://api.qrserver.com/v1/create-qr-code/?size=140x140&data="+encodeURIComponent(link), style:"width:100px; height:100px; border-radius:8px; border:1px solid var(--line); background:#fff;", alt:"QR"});
+        var qrImg = el("img", {src:"https://api.qrserver.com/v1/create-qr-code/?size=140x140&data="+encodeURIComponent(link), style:"width:100px; height:100px; border-radius:8px; border:1px solid var(--line); background:#fff; cursor:pointer;", alt:"QR (눌러서 크게 보기)", title:"눌러서 크게 보기"});
+        qrImg.addEventListener("click", function(){ showQrModal(app.label, link); });
         var infoCol = el("div", {style:"flex:1; min-width:160px;"});
         infoCol.appendChild(el("div", {style:"font-weight:700; font-size:12.5px; margin-bottom:4px;", html: app.label}));
         var linkInput = el("input", {type:"text", readonly:"readonly", style:"font-size:11.5px; margin-bottom:6px;"});
@@ -1239,6 +1258,31 @@
     }
 
     return card;
+  }
+
+  // 반 카드의 작은 QR을 누르면, 그 QR 하나만 크게 볼 수 있게 보여줍니다.
+  // 두 개(분석하기/감상하기)가 나란히 있으면 카메라로 찍기 어려워서, 한
+  // 번에 하나씩 크게 볼 수 있도록 따로 열어줍니다.
+  function showQrModal(label, link){
+    modalBox.innerHTML = "";
+    modalBox.appendChild(el("div", {style:"font-weight:700; font-size:15px; margin-bottom:12px; text-align:center;", html: esc(label)}));
+    var bigQr = el("img", {
+      src: "https://api.qrserver.com/v1/create-qr-code/?size=260x260&data=" + encodeURIComponent(link),
+      style: "width:100%; max-width:260px; display:block; margin:0 auto 14px; border-radius:10px; border:1px solid var(--line); background:#fff;",
+      alt: label
+    });
+    modalBox.appendChild(bigQr);
+    var linkInput = el("input", {type:"text", readonly:"readonly", style:"font-size:12px; margin-bottom:12px;"});
+    linkInput.value = link;
+    linkInput.addEventListener("click", function(){ this.select(); });
+    modalBox.appendChild(linkInput);
+    var copyBtn = el("button", {type:"button", class:"nav-btn next", style:"width:100%; margin-bottom:8px;", html:"🔗 링크 복사"});
+    copyBtn.addEventListener("click", function(){ copyTextToClipboard(link); showAlert("링크를 복사했어요!"); });
+    modalBox.appendChild(copyBtn);
+    var closeBtn = el("button", {type:"button", class:"nav-btn prev", style:"width:100%;", html:"닫기"});
+    closeBtn.addEventListener("click", closeModal);
+    modalBox.appendChild(closeBtn);
+    openModal();
   }
 
   function buildSubmissionsPanel(){
