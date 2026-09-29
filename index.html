@@ -468,14 +468,15 @@
         <button type="button" class="nameplate" id="nameplate" title="이름 바꾸기">콜콜이</button>
       </div>
       <div class="save-indicator"><span class="dot" id="saveDot"></span><span id="saveText">자동 저장됨</span></div>
-      <button class="reset-btn" id="reportsBtn" type="button">📋 학생 제출 현황</button>
-      <button class="reset-btn" id="resetBtn" type="button">🔄 새 시로 시작</button>
+      <button class="reset-btn" id="boardBtn" type="button">🏠 교사 보드</button>
+      <button class="reset-btn" id="previewBtn" type="button">👀 학생 화면 미리보기</button>
+      <button class="reset-btn" id="resetBtn" type="button">🔄 미리보기 초기화</button>
     </div>
   </header>
 
-  <div class="setup-screen" id="setupScreen" hidden></div>
+  <div id="teacherBoard" hidden></div>
 
-  <div class="stepbar" id="stepbar">
+  <div class="stepbar" id="stepbar" hidden>
     <div class="stepbar-top">
       <span class="stepbar-label" id="stepbarLabel">STEP 1 · 시 낭송하기</span>
       <span class="stepbar-count" id="stepbarCount">1 / 8</span>
@@ -487,17 +488,13 @@
     </div>
   </div>
 
-  <main class="card" id="stepCard"></main>
+  <main class="card" id="stepCard" hidden></main>
 
   <div class="modal-overlay" id="modalOverlay" hidden>
     <div class="modal-box" id="modalBox"></div>
   </div>
 
-  <div class="modal-overlay" id="reportsOverlay" hidden>
-    <div class="reports-box" id="reportsBox"></div>
-  </div>
-
-  <div class="foot-nav">
+  <div class="foot-nav" hidden>
     <button class="nav-btn prev" id="prevBtn" type="button">◀ 이전 단계</button>
     <button type="button" class="door-next" id="nextBtn">
       <svg class="door-next-svg" viewBox="0 0 56 56">
@@ -540,9 +537,8 @@
   function defaultState(){
     return {
       currentStep: 0,
-      studentSetupDone: false,
-      studentName: "",
-      student: { studentId:"", realName:"", nickname:"", character: CHARACTERS[0] },
+      teacherView: "board", // "board"(교사 보드, 첫 화면) | "steps"(STEP1~8 참고 미리보기)
+      student: { nickname:"", character: CHARACTERS[0] },
       poem: { title:"", author:"", text:"", linkedId:"" },
       step1: { recited:false, method:"" },
       step2: {
@@ -679,10 +675,13 @@
      that Code.gs parses as JSON itself. A shared passcode stands in for the
      Google sign-in identity check, since a cross-origin fetch can't carry that. */
   var POEM_API_URL = "https://script.google.com/macros/s/AKfycby58EUaNcIxZLkYaZOm2BRYycdCnW6RNQq0KsVqR0WWALedQv3dsRln2ppPG2sl6juL1g/exec";
+  // 학생용 앱 2개의 GitHub Pages 주소 (반 카드에서 QR·링크를 만드는 데 씁니다).
+  // 예: "https://아이디.github.io/저장소/" — 배포 후 여기에 꼭 채워주세요.
+  var BUNSEOK_STUDENT_URL = "";
+  var GAMSANG_STUDENT_URL = "";
   var sharedPoems = [];
-  var teacherPanelOpen = false;
   var teacherPasscode = "";
-  var activePoemId = "";
+  var boardUnlocked = false;
 
   function poemBankAvailable(){
     return !!(POEM_API_URL && POEM_API_URL.indexOf("http") === 0);
@@ -694,36 +693,34 @@
       .then(function(r){ return r.json(); })
       .then(function(list){
         sharedPoems = Array.isArray(list) ? list : [];
-        if(state.currentStep === 0) renderStep();
+        if(state.teacherView === "board") renderTeacherBoard();
       })
       .catch(function(){ /* offline, or POEM_API_URL not deployed yet — keep last-known list */ });
   }
 
-  // Which poem is currently being broadcast to the student app (읽기 전용:
-  // 학생 앱만 이 값을 실제로 소비하지만, 교사 화면에서도 뭐가 배포 중인지
-  // 보여주기 위해 같은 값을 가져와둡니다).
-  function fetchActivePoem(){
-    if(!poemBankAvailable()) return;
-    fetch(POEM_API_URL + "?action=current")
-      .then(function(r){ return r.json(); })
-      .then(function(poem){
-        activePoemId = (poem && poem.id) || "";
-        if(state.currentStep === 0) renderStep();
-      })
-      .catch(function(){ /* offline — keep last-known value */ });
+  function studentLinkFor(baseUrl, folderName){
+    baseUrl = String(baseUrl||"").trim();
+    if(!baseUrl) return "";
+    var sep = baseUrl.indexOf("?") > -1 ? "&" : "?";
+    return baseUrl + sep + "class=" + encodeURIComponent(folderName);
   }
 
-  function setActivePoem(p){
-    ensureTeacherPasscode(function(){
-      callPoemApi({ action:"setActive", id:p.id, passcode:teacherPasscode }).then(function(poem){
-        activePoemId = (poem && poem.id) || "";
-        renderStep();
-        showAlert('"' + p.title + '" 을(를) 학생용으로 배포했어요! 학생들이 다음에 접속하면 이 시로 나타나요.');
-      }).catch(function(err){
-        teacherPasscode = "";
-        showAlert((err && err.message) || "배포에 실패했어요. 선생님 암호를 확인해주세요.");
-      });
-    });
+  function copyTextToClipboard(text){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(text).catch(function(){ fallbackCopy(text); });
+    } else {
+      fallbackCopy(text);
+    }
+  }
+  function fallbackCopy(text){
+    var ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.position = "fixed";
+    ta.style.opacity = "0";
+    document.body.appendChild(ta);
+    ta.focus(); ta.select();
+    try{ document.execCommand("copy"); }catch(e){ /* ignore */ }
+    document.body.removeChild(ta);
   }
 
   function callPoemApi(payload){
@@ -810,9 +807,7 @@
 
   function studentName(){
     var nick = (state.student && state.student.nickname || "").trim();
-    if(nick) return nick + "콜콜이";
-    var n = (state.studentName||"").trim();
-    return n || "콜콜이";
+    return nick ? (nick + "콜콜이") : "콜콜이";
   }
   function updateNameplate(){
     document.getElementById("nameplate").textContent = studentName();
@@ -880,18 +875,33 @@
     }, 360);
   });
   document.getElementById("resetBtn").addEventListener("click", function(){
-    showConfirm("정말 처음부터 새로 시작할까요? 지금까지 작성한 내용이 모두 지워져요.", function(){
-      state = defaultState();
+    showConfirm("미리보기에서 지금까지 입력한 내용을 모두 지우고 새로 시작할까요? (반·시 등록·제출 현황에는 영향 없어요)", function(){
+      var fresh = defaultState();
+      state.currentStep = 0;
+      state.poem = fresh.poem;
+      state.step1 = fresh.step1;
+      state.step2 = fresh.step2;
+      state.step3 = fresh.step3;
+      state.step4 = fresh.step4;
+      state.step5 = fresh.step5;
+      state.step6 = fresh.step6;
+      state.step7 = fresh.step7;
       save();
       renderAll();
     });
   });
-
-  /* ---------------- 학생 제출 현황 (교사 전용) ---------------- */
-  var reportsOverlay = document.getElementById("reportsOverlay");
-  reportsOverlay.addEventListener("click", function(e){
-    if(e.target === reportsOverlay) reportsOverlay.hidden = true;
+  document.getElementById("boardBtn").addEventListener("click", function(){
+    state.teacherView = "board";
+    save();
+    renderAll();
   });
+  document.getElementById("previewBtn").addEventListener("click", function(){
+    state.teacherView = "steps";
+    save();
+    renderAll();
+  });
+
+  /* ---------------- 학생 제출 현황 · 반 관리 (교사 보드) ---------------- */
 
   var reportsRows = [];
   var reportsFolders = []; // 각 항목: {folderId, folderName, createdAt, deadline}
@@ -916,7 +926,6 @@
     ]).then(function(results){
       reportsRows = Array.isArray(results[0]) ? results[0] : [];
       reportsFolders = Array.isArray(results[1]) ? results[1] : [];
-      renderReportsBox();
     });
   }
 
@@ -936,22 +945,6 @@
     var pad = function(n){ return (n<10?"0":"")+n; };
     return (d.getMonth()+1) + "월 " + d.getDate() + "일 " + ampm + " " + h12 + ":" + pad(d.getMinutes());
   }
-
-  document.getElementById("reportsBtn").addEventListener("click", function(){
-    if(!poemBankAvailable()){
-      showAlert("이 기능을 쓰려면 이 파일의 POEM_API_URL이 설정되어 있어야 해요.");
-      return;
-    }
-    ensureTeacherPasscode(function(){
-      selectedFolder = "__ALL__";
-      loadReportsAndFolders().then(function(){
-        reportsOverlay.hidden = false;
-      }).catch(function(err){
-        teacherPasscode = "";
-        showAlert((err && err.message) || "목록을 불러오지 못했어요. 선생님 암호를 확인해주세요.");
-      });
-    });
-  });
 
   function scoreAverage(scoresJson){
     var scores; try{ scores = JSON.parse(scoresJson||"[]"); }catch(e){ scores = []; }
@@ -976,7 +969,280 @@
     return groups;
   }
 
-  function renderReportsBox(){
+  /* ================= 교사 보드 (첫 화면) ================= */
+
+  function renderTeacherBoard(){
+    var board = document.getElementById("teacherBoard");
+    board.innerHTML = "";
+
+    var poemCard = el("div", {class:"card"});
+    poemCard.appendChild(el("h2", {class:"step-title", style:"margin-bottom:10px;", html:"📚 시 등록"}));
+    poemCard.appendChild(buildPoemRegisterPanel());
+    board.appendChild(poemCard);
+
+    var classCard = el("div", {class:"card", style:"margin-top:16px;"});
+    classCard.appendChild(el("h2", {class:"step-title", style:"margin-bottom:10px;", html:"🏫 반 관리 · 시 배포"}));
+    if(!poemBankAvailable()){
+      classCard.appendChild(el("div", {class:"field-hint", html:"이 기능을 쓰려면 이 파일 맨 위 POEM_API_URL을 채워주세요."}));
+    } else if(!boardUnlocked){
+      classCard.appendChild(el("div", {class:"field-hint", style:"margin-bottom:10px;", html:"선생님 암호를 확인하면 반 관리와 학생 제출 현황을 볼 수 있어요."}));
+      var unlockBtn = el("button", {type:"button", class:"nav-btn next", html:"🔒 반 관리 · 제출 현황 불러오기"});
+      unlockBtn.addEventListener("click", function(){
+        ensureTeacherPasscode(function(){
+          unlockBtn.disabled = true;
+          loadReportsAndFolders().then(function(){
+            boardUnlocked = true;
+            renderTeacherBoard();
+          }).catch(function(err){
+            teacherPasscode = "";
+            unlockBtn.disabled = false;
+            showAlert((err && err.message) || "불러오지 못했어요. 선생님 암호를 확인해주세요.");
+          });
+        });
+      });
+      classCard.appendChild(unlockBtn);
+    } else {
+      classCard.appendChild(buildClassManagementPanel());
+    }
+    board.appendChild(classCard);
+
+    if(boardUnlocked){
+      var subCard = el("div", {class:"card", style:"margin-top:16px;"});
+      subCard.appendChild(buildSubmissionsPanel());
+      board.appendChild(subCard);
+    }
+  }
+
+  function buildPoemRegisterPanel(){
+    var panel = el("div", {});
+    if(!poemBankAvailable()){
+      panel.appendChild(el("div", {class:"field-hint", html:"시 등록·공유 기능을 쓰려면 이 파일 맨 위 POEM_API_URL에 배포한 Apps Script 웹앱 주소를 넣어주세요."}));
+      return panel;
+    }
+    panel.appendChild(el("div", {class:"field-hint", html:"여기서 등록한 시는 아래 반 카드에서 골라 배포할 수 있어요. 등록·삭제에는 선생님 암호가 필요해요."}));
+
+    var tIn = el("input", {type:"text", placeholder:"시 제목", id:"tp-title", style:"margin-bottom:8px;"});
+    var aIn = el("input", {type:"text", placeholder:"작가명", id:"tp-author", style:"margin-bottom:8px;"});
+    var xIn = el("textarea", {class:"tall", placeholder:"시 전문을 붙여넣으세요", id:"tp-text", style:"margin-bottom:8px;"});
+    panel.appendChild(tIn);
+    panel.appendChild(aIn);
+    panel.appendChild(xIn);
+
+    var msg = el("div", {class:"form-msg"});
+    var addBtn = el("button", {type:"button", class:"add-btn", html:"➕ 시 등록하기"});
+    addBtn.addEventListener("click", function(){
+      var t = tIn.value.trim(), a = aIn.value.trim(), x = xIn.value.trim();
+      if(!t || !x){
+        msg.style.color = "var(--danger)";
+        msg.textContent = "제목과 시 전문은 꼭 입력해주세요.";
+        return;
+      }
+      ensureTeacherPasscode(function(){
+        addBtn.disabled = true;
+        addSharedPoem(t, a, x).then(function(){
+          msg.style.color = "var(--accent3)";
+          msg.textContent = "등록됐어요! 아래 반 카드에서 바로 배포할 수 있어요.";
+          tIn.value = ""; aIn.value = ""; xIn.value = "";
+          addBtn.disabled = false;
+          if(state.teacherView === "board") renderTeacherBoard();
+        }).catch(function(err){
+          teacherPasscode = "";
+          msg.style.color = "var(--danger)";
+          msg.textContent = (err && err.message) || "등록에 실패했어요. 선생님 암호를 확인해주세요.";
+          addBtn.disabled = false;
+        });
+      });
+    });
+    panel.appendChild(addBtn);
+    panel.appendChild(msg);
+
+    if(sharedPoems.length){
+      var list = el("div", {style:"margin-top:12px;"});
+      sharedPoems.forEach(function(p){
+        var row = el("div", {class:"poem-row"});
+        row.appendChild(el("span", {style:"flex:1; min-width:0;", html: esc(p.title||"(제목 없음)") + " · " + esc(p.author||"작가 미상")}));
+        var delBtn = el("button", {type:"button", class:"remove-x", html:"✕"});
+        delBtn.addEventListener("click", function(){
+          showConfirm('"' + p.title + '" 시를 목록에서 삭제할까요?', function(){
+            ensureTeacherPasscode(function(){
+              deleteSharedPoem(p.id).then(function(){
+                if(state.teacherView === "board") renderTeacherBoard();
+              }).catch(function(err){
+                teacherPasscode = "";
+                showAlert((err && err.message) || "삭제에 실패했어요. 선생님 암호를 확인해주세요.");
+              });
+            });
+          });
+        });
+        row.appendChild(delBtn);
+        list.appendChild(row);
+      });
+      panel.appendChild(list);
+    }
+    return panel;
+  }
+
+  function buildClassManagementPanel(){
+    var wrap = el("div", {});
+    wrap.appendChild(el("div", {class:"field-hint", html:"반 이름을 만들면 그 반 전용 링크·QR이 생겨요. 학생은 그 링크로 들어오기만 하면 되고, 제출도 자동으로 이 반으로 모여요."}));
+
+    var addRow = el("div", {style:"display:flex; gap:8px; margin:10px 0 14px;"});
+    var nameInput = el("input", {type:"text", placeholder:"새 반 이름 (예: 1반 2교시)", style:"flex:1;"});
+    var addBtn = el("button", {type:"button", class:"add-btn", html:"➕ 반 만들기"});
+    addBtn.addEventListener("click", function(){
+      var name = nameInput.value.trim();
+      if(!name){ showAlert("반 이름을 입력해주세요."); return; }
+      addBtn.disabled = true;
+      callReportsApi({ action:"addFolder", folderName:name }).then(function(list){
+        reportsFolders = Array.isArray(list) ? list : reportsFolders;
+        nameInput.value = "";
+        addBtn.disabled = false;
+        renderTeacherBoard();
+      }).catch(function(err){
+        addBtn.disabled = false;
+        showAlert((err && err.message) || "반을 만들지 못했어요.");
+      });
+    });
+    addRow.appendChild(nameInput);
+    addRow.appendChild(addBtn);
+    wrap.appendChild(addRow);
+
+    if(!reportsFolders.length){
+      wrap.appendChild(el("div", {class:"field-hint", html:"아직 만든 반이 없어요."}));
+    }
+
+    reportsFolders.forEach(function(f){
+      wrap.appendChild(buildClassCard(f));
+    });
+    return wrap;
+  }
+
+  function buildClassCard(f){
+    var card = el("div", {class:"set-card"});
+    var top = el("div", {class:"set-card-top"});
+    top.appendChild(el("span", {html:"🏫 " + esc(f.folderName)}));
+    var delFolderBtn = el("button", {type:"button", class:"remove-x", html:"✕"});
+    delFolderBtn.addEventListener("click", function(){
+      showConfirm('"' + f.folderName + '" 반을 목록에서 삭제할까요? (이미 제출된 학생 자료는 지워지지 않아요)', function(){
+        callReportsApi({ action:"deleteFolder", folderId:f.folderId }).then(function(list){
+          reportsFolders = Array.isArray(list) ? list : reportsFolders;
+          if(selectedFolder === f.folderName) selectedFolder = "__ALL__";
+          renderTeacherBoard();
+        }).catch(function(err){
+          showAlert((err && err.message) || "반을 삭제하지 못했어요.");
+        });
+      });
+    });
+    top.appendChild(delFolderBtn);
+    card.appendChild(top);
+
+    // ---- 마감 ----
+    card.appendChild(el("div", {
+      class:"field-hint",
+      style:"font-weight:700; margin:2px 0 6px; color:" + (f.deadline ? "var(--accent3)" : "var(--ink-soft)") + ";",
+      html: f.deadline ? ("⏰ 이 반 마감: " + formatDeadlineDisplay(f.deadline) + "까지") : "⏰ 이 반은 아직 마감이 없어요 (언제든 제출 가능)."
+    }));
+    var dRow = el("div", {style:"display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px;"});
+    var dInput = el("input", {type:"datetime-local", style:"flex:1; min-width:170px;"});
+    dInput.value = isoToLocalInputValue(f.deadline);
+    var dSetBtn = el("button", {type:"button", class:"add-btn", html:"⏰ 설정"});
+    dSetBtn.addEventListener("click", function(){
+      if(!dInput.value){ showAlert("날짜와 시간을 선택해주세요."); return; }
+      var localDate = new Date(dInput.value);
+      dSetBtn.disabled = true;
+      callReportsApi({ action:"setDeadline", folderId:f.folderId, deadline: localDate.toISOString() }).then(function(res){
+        f.deadline = (res && res.deadline) || "";
+        dSetBtn.disabled = false;
+        renderTeacherBoard();
+      }).catch(function(err){
+        dSetBtn.disabled = false;
+        showAlert((err && err.message) || "기한을 설정하지 못했어요.");
+      });
+    });
+    dRow.appendChild(dInput);
+    dRow.appendChild(dSetBtn);
+    if(f.deadline){
+      var dClearBtn = el("button", {type:"button", class:"nav-btn prev", html:"해제"});
+      dClearBtn.addEventListener("click", function(){
+        showConfirm('"' + f.folderName + '" 반의 제출 기한을 없앨까요?', function(){
+          callReportsApi({ action:"setDeadline", folderId:f.folderId, deadline:"" }).then(function(){
+            f.deadline = "";
+            renderTeacherBoard();
+          }).catch(function(err){
+            showAlert((err && err.message) || "기한을 해제하지 못했어요.");
+          });
+        });
+      });
+      dRow.appendChild(dClearBtn);
+    }
+    card.appendChild(dRow);
+
+    // ---- 이 반에 배포할 시 ----
+    var deployWrap = el("div", {});
+    deployWrap.appendChild(el("div", {class:"field-label", style:"margin-bottom:6px;", html:"📢 이 반에 배포할 시"}));
+    if(!sharedPoems.length){
+      deployWrap.appendChild(el("div", {class:"field-hint", html:"등록된 시가 없어요. 위 '시 등록'에서 먼저 등록해주세요."}));
+    } else {
+      sharedPoems.forEach(function(p){
+        var isActive = p.id === f.activePoemId;
+        var row = el("div", {class:"poem-row"});
+        row.appendChild(el("span", {style:"flex:1; min-width:0;", html: (isActive?"📢 ":"") + esc(p.title||"(제목 없음)") + " · " + esc(p.author||"작가 미상")}));
+        var deployBtn = el("button", {type:"button", class:"teacher-toggle", style:"margin-top:0; padding:5px 10px; font-size:11.5px;", html: isActive ? "🔄 재배포" : "📢 배포"});
+        deployBtn.addEventListener("click", function(){
+          deployBtn.disabled = true;
+          callReportsApi({ action:"setActiveForFolder", folderId:f.folderId, poemId:p.id }).then(function(list){
+            reportsFolders = Array.isArray(list) ? list : reportsFolders;
+            renderTeacherBoard();
+          }).catch(function(err){
+            deployBtn.disabled = false;
+            showAlert((err && err.message) || "배포에 실패했어요.");
+          });
+        });
+        row.appendChild(deployBtn);
+        deployWrap.appendChild(row);
+      });
+    }
+    card.appendChild(deployWrap);
+
+    // ---- 학생용 링크 + QR (배포된 시가 있을 때만) ----
+    var activeFolder = reportsFolders.filter(function(x){ return x.folderId === f.folderId; })[0] || f;
+    if(activeFolder.activePoemId){
+      var linkWrap = el("div", {style:"margin-top:12px; padding-top:12px; border-top:1px dashed var(--line);"});
+      [
+        { label:"📖 분석하기 학생용", url: BUNSEOK_STUDENT_URL },
+        { label:"📗 감상하기 학생용", url: GAMSANG_STUDENT_URL }
+      ].forEach(function(app){
+        if(!app.url){
+          linkWrap.appendChild(el("div", {class:"field-hint", style:"margin-bottom:8px;", html: app.label + ": 이 파일 상단의 주소(BUNSEOK_STUDENT_URL/GAMSANG_STUDENT_URL)를 먼저 채워주세요."}));
+          return;
+        }
+        var link = studentLinkFor(app.url, f.folderName);
+        var row = el("div", {style:"display:flex; gap:12px; align-items:flex-start; margin-bottom:10px; flex-wrap:wrap;"});
+        var qrImg = el("img", {src:"https://api.qrserver.com/v1/create-qr-code/?size=140x140&data="+encodeURIComponent(link), style:"width:100px; height:100px; border-radius:8px; border:1px solid var(--line); background:#fff;", alt:"QR"});
+        var infoCol = el("div", {style:"flex:1; min-width:160px;"});
+        infoCol.appendChild(el("div", {style:"font-weight:700; font-size:12.5px; margin-bottom:4px;", html: app.label}));
+        var linkInput = el("input", {type:"text", readonly:"readonly", style:"font-size:11.5px; margin-bottom:6px;"});
+        linkInput.value = link;
+        linkInput.addEventListener("click", function(){ this.select(); });
+        infoCol.appendChild(linkInput);
+        var copyBtn = el("button", {type:"button", class:"add-btn", style:"padding:5px 10px; font-size:11.5px;", html:"🔗 링크 복사"});
+        copyBtn.addEventListener("click", function(){
+          copyTextToClipboard(link);
+          showAlert("링크를 복사했어요!");
+        });
+        infoCol.appendChild(copyBtn);
+        row.appendChild(qrImg);
+        row.appendChild(infoCol);
+        linkWrap.appendChild(row);
+      });
+      card.appendChild(linkWrap);
+    }
+
+    return card;
+  }
+
+  function buildSubmissionsPanel(){
+    var wrap = el("div", {});
     var rows = reportsRows;
     var groups = buildReportGroups(rows);
     var visibleRows;
@@ -984,142 +1250,51 @@
     else if(selectedFolder === "__NONE__") visibleRows = rows.filter(function(r){ return !(r.folderName||""); });
     else visibleRows = rows.filter(function(r){ return (r.folderName||"") === selectedFolder; });
 
-    var box = document.getElementById("reportsBox");
-    box.innerHTML = "";
     var head = el("div", {style:"display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:8px; flex-wrap:wrap;"});
     head.appendChild(el("h2", {class:"step-title", style:"margin:0;", html:"📋 학생 제출 현황 (" + rows.length + "명)"}));
-    var btnGroup = el("div", {style:"display:flex; gap:8px;"});
-    var csvBtn = el("button", {type:"button", class:"add-btn", html: selectedFolder === "__ALL__" ? "⬇️ 전체 CSV로 내보내기" : "⬇️ 이 폴더만 CSV로 내보내기"});
+    var csvBtn = el("button", {type:"button", class:"add-btn", html: selectedFolder === "__ALL__" ? "⬇️ 전체 CSV로 내보내기" : "⬇️ 이 반만 CSV로 내보내기"});
     csvBtn.addEventListener("click", function(){
-      var label = selectedFolder === "__ALL__" ? "전체" : (selectedFolder === "__NONE__" ? "폴더없음" : selectedFolder);
+      var label = selectedFolder === "__ALL__" ? "전체" : (selectedFolder === "__NONE__" ? "반없음" : selectedFolder);
       downloadReportsCsv(visibleRows, label);
     });
-    var closeBtn = el("button", {type:"button", class:"nav-btn prev", html:"닫기"});
-    closeBtn.addEventListener("click", function(){ reportsOverlay.hidden = true; });
-    btnGroup.appendChild(csvBtn); btnGroup.appendChild(closeBtn);
-    head.appendChild(btnGroup);
-    box.appendChild(head);
-
-    // ---- 폴더 관리 (폴더마다 자기만의 제출 기한을 가짐) ----
-    var folderPanel = el("div", {class:"teacher-panel", style:"margin-bottom:16px;"});
-    folderPanel.appendChild(el("div", {class:"field-hint", html:"폴더 이름을 만들어서 학생들에게 알려주세요. 학생이 제출할 때 그 이름을 적으면 여기서 폴더별로 모이고, 폴더마다 따로 제출 기한을 걸 수 있어요."}));
-    var folderInputRow = el("div", {style:"display:flex; gap:8px; margin-bottom:12px;"});
-    var folderInput = el("input", {type:"text", placeholder:"새 폴더 이름 (예: 1반 2교시)", style:"flex:1;"});
-    var folderAddBtn = el("button", {type:"button", class:"add-btn", html:"➕ 폴더 만들기"});
-    folderAddBtn.addEventListener("click", function(){
-      var name = folderInput.value.trim();
-      if(!name){ showAlert("폴더 이름을 입력해주세요."); return; }
-      folderAddBtn.disabled = true;
-      callReportsApi({ action:"addFolder", folderName:name }).then(function(list){
-        reportsFolders = Array.isArray(list) ? list : reportsFolders;
-        folderInput.value = "";
-        folderAddBtn.disabled = false;
-        renderReportsBox();
-      }).catch(function(err){
-        folderAddBtn.disabled = false;
-        showAlert((err && err.message) || "폴더를 만들지 못했어요.");
-      });
-    });
-    folderInputRow.appendChild(folderInput);
-    folderInputRow.appendChild(folderAddBtn);
-    folderPanel.appendChild(folderInputRow);
-
-    reportsFolders.forEach(function(f){
-      var card = el("div", {class:"set-card"});
-      var top = el("div", {class:"set-card-top"});
-      top.appendChild(el("span", {html:"📁 " + esc(f.folderName)}));
-      var delFolderBtn = el("button", {type:"button", class:"remove-x", html:"✕"});
-      delFolderBtn.addEventListener("click", function(){
-        showConfirm('"' + f.folderName + '" 폴더를 목록에서 삭제할까요? (이미 제출된 학생 자료는 지워지지 않아요)', function(){
-          callReportsApi({ action:"deleteFolder", folderId:f.folderId }).then(function(list){
-            reportsFolders = Array.isArray(list) ? list : reportsFolders;
-            if(selectedFolder === f.folderName) selectedFolder = "__ALL__";
-            renderReportsBox();
-          }).catch(function(err){
-            showAlert((err && err.message) || "폴더를 삭제하지 못했어요.");
-          });
-        });
-      });
-      top.appendChild(delFolderBtn);
-      card.appendChild(top);
-
-      card.appendChild(el("div", {
-        class:"field-hint",
-        style:"font-weight:700; margin:2px 0 6px; color:" + (f.deadline ? "var(--accent3)" : "var(--ink-soft)") + ";",
-        html: f.deadline ? ("⏰ 이 폴더 마감: " + formatDeadlineDisplay(f.deadline) + "까지") : "⏰ 이 폴더는 아직 마감이 없어요 (언제든 제출 가능)."
-      }));
-      var dRow = el("div", {style:"display:flex; gap:8px; flex-wrap:wrap;"});
-      var dInput = el("input", {type:"datetime-local", style:"flex:1; min-width:170px;"});
-      dInput.value = isoToLocalInputValue(f.deadline);
-      var dSetBtn = el("button", {type:"button", class:"add-btn", html:"⏰ 설정"});
-      dSetBtn.addEventListener("click", function(){
-        if(!dInput.value){ showAlert("날짜와 시간을 선택해주세요."); return; }
-        var localDate = new Date(dInput.value);
-        dSetBtn.disabled = true;
-        callReportsApi({ action:"setDeadline", folderId:f.folderId, deadline: localDate.toISOString() }).then(function(res){
-          f.deadline = (res && res.deadline) || "";
-          dSetBtn.disabled = false;
-          renderReportsBox();
-        }).catch(function(err){
-          dSetBtn.disabled = false;
-          showAlert((err && err.message) || "기한을 설정하지 못했어요.");
-        });
-      });
-      dRow.appendChild(dInput);
-      dRow.appendChild(dSetBtn);
-      if(f.deadline){
-        var dClearBtn = el("button", {type:"button", class:"nav-btn prev", html:"해제"});
-        dClearBtn.addEventListener("click", function(){
-          showConfirm('"' + f.folderName + '" 폴더의 제출 기한을 없앨까요?', function(){
-            callReportsApi({ action:"setDeadline", folderId:f.folderId, deadline:"" }).then(function(){
-              f.deadline = "";
-              renderReportsBox();
-            }).catch(function(err){
-              showAlert((err && err.message) || "기한을 해제하지 못했어요.");
-            });
-          });
-        });
-        dRow.appendChild(dClearBtn);
-      }
-      card.appendChild(dRow);
-      folderPanel.appendChild(card);
-    });
-    box.appendChild(folderPanel);
+    head.appendChild(csvBtn);
+    wrap.appendChild(head);
 
     if(!rows.length){
-      box.appendChild(el("div", {class:"field-hint", html:"아직 제출한 학생이 없어요."}));
-      return;
+      wrap.appendChild(el("div", {class:"field-hint", html:"아직 제출한 학생이 없어요."}));
+      return wrap;
     }
 
-    // ---- 보기 필터 탭: 눌러서 그 폴더 내용만 아래에 표시 ----
+    // ---- 보기 필터 탭: 눌러서 그 반 내용만 아래에 표시 ----
     var tabWrap = el("div", {class:"checkbox-grid", style:"margin-bottom:14px;"});
     function makeTab(label, key, count){
       var chip = el("span", {class:"chip" + (selectedFolder===key?" checked":""), style:"cursor:pointer;"});
       chip.appendChild(textNode(label + " (" + count + ")"));
-      chip.addEventListener("click", function(){ selectedFolder = key; renderReportsBox(); });
+      chip.addEventListener("click", function(){ selectedFolder = key; renderTeacherBoard(); });
       return chip;
     }
     tabWrap.appendChild(makeTab("전체", "__ALL__", rows.length));
     groups.forEach(function(g){
       var key = g.name || "__NONE__";
-      tabWrap.appendChild(makeTab(g.name ? ("📁 " + g.name) : "📄 폴더 없음", key, g.rows.length));
+      tabWrap.appendChild(makeTab(g.name ? ("🏫 " + g.name) : "📄 반 없음", key, g.rows.length));
     });
-    box.appendChild(tabWrap);
+    wrap.appendChild(tabWrap);
 
     if(!visibleRows.length){
-      box.appendChild(el("div", {class:"field-hint", html:"이 폴더에는 표시할 제출물이 없어요."}));
-      return;
+      wrap.appendChild(el("div", {class:"field-hint", html:"이 반에는 표시할 제출물이 없어요."}));
+      return wrap;
     }
 
     if(selectedFolder === "__ALL__"){
       groups.forEach(function(g){
         if(!g.rows.length) return;
-        box.appendChild(el("h3", {style:"font-size:14px; margin:18px 0 8px;", html: g.name ? ("📁 " + esc(g.name) + " (" + g.rows.length + "명)") : ("📄 폴더 없음 (" + g.rows.length + "명)")}));
-        box.appendChild(buildReportsTable(g.rows));
+        wrap.appendChild(el("h3", {style:"font-size:14px; margin:18px 0 8px;", html: g.name ? ("🏫 " + esc(g.name) + " (" + g.rows.length + "명)") : ("📄 반 없음 (" + g.rows.length + "명)")}));
+        wrap.appendChild(buildReportsTable(g.rows));
       });
     } else {
-      box.appendChild(buildReportsTable(visibleRows));
+      wrap.appendChild(buildReportsTable(visibleRows));
     }
+    return wrap;
   }
 
   function buildReportsTable(rows){
@@ -1145,7 +1320,7 @@
         showConfirm(r.studentId + "번 학생의 제출물을 삭제할까요?", function(){
           callReportsApi({ action:"deleteReport", studentId:r.studentId, poemId:r.poemId }).then(function(list){
             reportsRows = Array.isArray(list) ? list : reportsRows.filter(function(x){ return x!==r; });
-            renderReportsBox();
+            renderTeacherBoard();
           }).catch(function(err){
             showAlert((err && err.message) || "삭제하지 못했어요.");
           });
@@ -1213,95 +1388,26 @@
   }
 
   function renderAll(){
-    if(!state.studentSetupDone){
-      document.getElementById("stepbar").hidden = true;
-      document.getElementById("stepCard").hidden = true;
-      document.querySelector(".foot-nav").hidden = true;
-      renderSetupScreen();
+    if(state.teacherView === "steps"){
+      document.getElementById("teacherBoard").hidden = true;
+      document.getElementById("stepbar").hidden = false;
+      document.getElementById("stepCard").hidden = false;
+      document.querySelector(".foot-nav").hidden = false;
+      renderDoors();
+      renderStep();
+      var prevBtn = document.getElementById("prevBtn");
+      var nextBtn = document.getElementById("nextBtn");
+      prevBtn.disabled = state.currentStep === 0;
+      nextBtn.disabled = false;
+      nextBtn.classList.remove("opening");
+      document.getElementById("nextLabel").textContent = state.currentStep === STEPS.length-1 ? "처음 문으로" : "다음 문 열기";
       return;
     }
-    document.getElementById("setupScreen").hidden = true;
-    document.getElementById("stepbar").hidden = false;
-    document.getElementById("stepCard").hidden = false;
-    document.querySelector(".foot-nav").hidden = false;
-    renderDoors();
-    renderStep();
-    var prevBtn = document.getElementById("prevBtn");
-    var nextBtn = document.getElementById("nextBtn");
-    prevBtn.disabled = state.currentStep === 0;
-    nextBtn.disabled = false;
-    nextBtn.classList.remove("opening");
-    document.getElementById("nextLabel").textContent = state.currentStep === STEPS.length-1 ? "처음 문으로" : "다음 문 열기";
-  }
-
-  function renderSetupScreen(){
-    var screen = document.getElementById("setupScreen");
-    screen.hidden = false;
-    screen.innerHTML = "";
-
-    var card = el("div", {class:"card"});
-    card.appendChild(el("h2", {class:"step-title", style:"margin-bottom:6px;", html:"시작하기 전에"}));
-    card.appendChild(el("div", {class:"step-guide", html:"💡 학번과 이름, 닉네임을 적고 나만의 캐릭터를 골라보세요!"}));
-
-    var idWrap = el("div", {class:"field-block"});
-    idWrap.appendChild(el("label", {class:"field-label", html:"학번"}));
-    var idIn = el("input", {type:"text", placeholder:"예: 10203"});
-    idIn.value = state.student.studentId;
-    idIn.addEventListener("input", function(){ state.student.studentId = this.value; save(); });
-    idWrap.appendChild(idIn);
-    card.appendChild(idWrap);
-
-    var nameWrap = el("div", {class:"field-block"});
-    nameWrap.appendChild(el("label", {class:"field-label", html:"이름"}));
-    var nameIn = el("input", {type:"text", placeholder:"이름을 적어주세요"});
-    nameIn.value = state.student.realName;
-    nameIn.addEventListener("input", function(){ state.student.realName = this.value; save(); });
-    nameWrap.appendChild(nameIn);
-    card.appendChild(nameWrap);
-
-    var nickWrap = el("div", {class:"field-block"});
-    nickWrap.appendChild(el("label", {class:"field-label", html:"닉네임"}));
-    nickWrap.appendChild(el("div", {class:"field-hint", html:"닉네임 뒤에 자동으로 '콜콜이'가 붙어서 캐릭터 이름표에 나타나요. (예: 구름 → 구름콜콜이)"}));
-    var nickIn = el("input", {type:"text", placeholder:"예: 구름", id:"setupNickInput"});
-    nickIn.value = state.student.nickname;
-    nickIn.addEventListener("input", function(){
-      state.student.nickname = this.value;
-      save();
-      var preview = document.getElementById("setupNickPreview");
-      if(preview) preview.textContent = (this.value.trim() || "___") + "콜콜이";
-    });
-    nickWrap.appendChild(nickIn);
-    nickWrap.appendChild(el("div", {class:"field-hint", id:"setupNickPreview", style:"font-weight:700; color:var(--accent);", html: esc((state.student.nickname.trim() || "___") + "콜콜이")}));
-    card.appendChild(nickWrap);
-
-    var charWrap = el("div", {class:"field-block"});
-    charWrap.appendChild(el("label", {class:"field-label", html:"캐릭터 선택"}));
-    var grid = el("div", {class:"character-grid"});
-    CHARACTERS.forEach(function(c){
-      var btn = el("button", {type:"button", class:"character-btn" + (state.student.character===c?" selected":""), html:c});
-      btn.addEventListener("click", function(){
-        state.student.character = c;
-        save();
-        renderSetupScreen();
-      });
-      grid.appendChild(btn);
-    });
-    charWrap.appendChild(grid);
-    card.appendChild(charWrap);
-
-    var startBtn = el("button", {type:"button", class:"nav-btn next", style:"width:100%; margin-top:6px;", html:"시작하기 ▶"});
-    startBtn.addEventListener("click", function(){
-      if(!state.student.studentId.trim() || !state.student.realName.trim() || !state.student.nickname.trim()){
-        showAlert("학번, 이름, 닉네임을 모두 입력해주세요!");
-        return;
-      }
-      state.studentSetupDone = true;
-      save();
-      renderAll();
-    });
-    card.appendChild(startBtn);
-
-    screen.appendChild(card);
+    document.getElementById("stepbar").hidden = true;
+    document.getElementById("stepCard").hidden = true;
+    document.querySelector(".foot-nav").hidden = true;
+    document.getElementById("teacherBoard").hidden = false;
+    renderTeacherBoard();
   }
 
   /* ---------------- Step renderers ---------------- */
@@ -1365,19 +1471,10 @@
     }
     wrap.appendChild(labelRow);
 
-    if(poemBankAvailable()){
-      var activePoem = sharedPoems.filter(function(p){ return p.id === activePoemId; })[0];
-      wrap.appendChild(el("div", {
-        class:"field-hint",
-        style:"font-weight:700; color:" + (activePoem ? "var(--accent3)" : "var(--ink-soft)") + ";",
-        html: activePoem ? ("📢 지금 학생용으로 배포 중: " + esc(activePoem.title)) : "📢 아직 학생용으로 배포한 시가 없어요."
-      }));
-    }
-
     if(!poemBankAvailable()){
       wrap.appendChild(el("div", {class:"field-hint", html:"시 보관함을 쓰려면 이 파일 맨 위 POEM_API_URL에 배포한 Apps Script 웹앱 주소를 넣어주세요. 지금은 아래에 직접 입력해주세요."}));
     } else if(sharedPoems.length === 0){
-      wrap.appendChild(el("div", {class:"field-hint", html:"아직 등록된 시가 없어요. 아래 '선생님 전용' 메뉴에서 시를 등록해보세요."}));
+      wrap.appendChild(el("div", {class:"field-hint", html:"아직 등록된 시가 없어요. 🏠 교사 보드에서 시를 등록해보세요."}));
     } else {
       var select = el("select", {class:"poem-select"});
       select.appendChild(el("option", {value:"", html:"직접 입력하기"}));
@@ -1400,88 +1497,10 @@
         }
       });
       wrap.appendChild(select);
-      wrap.appendChild(el("div", {class:"field-hint", html:"목록에서 시를 고르면 제목·작가명·시 전문이 자동으로 채워져요."}));
+      wrap.appendChild(el("div", {class:"field-hint", html:"목록에서 시를 고르면 제목·작가명·시 전문이 자동으로 채워져요. (시 등록·반별 배포는 🏠 교사 보드에서 해요.)"}));
     }
-
-    var toggle = el("button", {type:"button", class:"teacher-toggle", html: (teacherPanelOpen ? "🧑‍🏫 선생님 메뉴 닫기 ▲" : "🧑‍🏫 선생님 전용: 시 등록·관리 ▼")});
-    toggle.addEventListener("click", function(){ teacherPanelOpen = !teacherPanelOpen; renderStep(); });
-    wrap.appendChild(toggle);
-
-    if(teacherPanelOpen){ wrap.appendChild(buildTeacherPanel()); }
 
     return wrap;
-  }
-
-  function buildTeacherPanel(){
-    var panel = el("div", {class:"teacher-panel"});
-    if(!poemBankAvailable()){
-      panel.appendChild(el("div", {class:"field-hint", html:"시 등록·공유 기능을 쓰려면 이 파일 맨 위 POEM_API_URL에 배포한 Apps Script 웹앱 주소를 넣어주세요."}));
-      return panel;
-    }
-    panel.appendChild(el("div", {class:"field-hint", html:"여기서 등록한 시는 모든 학생 화면에 나타나요(새로고침 버튼으로 최신 목록을 볼 수 있어요). 등록·삭제에는 선생님 암호가 필요해요."}));
-
-    var tIn = el("input", {type:"text", placeholder:"시 제목", id:"tp-title", style:"margin-bottom:8px;"});
-    var aIn = el("input", {type:"text", placeholder:"작가명", id:"tp-author", style:"margin-bottom:8px;"});
-    var xIn = el("textarea", {class:"tall", placeholder:"시 전문을 붙여넣으세요", id:"tp-text", style:"margin-bottom:8px;"});
-    panel.appendChild(tIn);
-    panel.appendChild(aIn);
-    panel.appendChild(xIn);
-
-    var msg = el("div", {class:"form-msg"});
-    var addBtn = el("button", {type:"button", class:"add-btn", html:"➕ 시 등록하기"});
-    addBtn.addEventListener("click", function(){
-      var t = tIn.value.trim(), a = aIn.value.trim(), x = xIn.value.trim();
-      if(!t || !x){
-        msg.style.color = "var(--danger)";
-        msg.textContent = "제목과 시 전문은 꼭 입력해주세요.";
-        return;
-      }
-      ensureTeacherPasscode(function(){
-        addBtn.disabled = true;
-        addSharedPoem(t, a, x).then(function(){
-          msg.style.color = "var(--accent3)";
-          msg.textContent = "등록됐어요! 학생 화면에도 곧 나타나요.";
-          tIn.value = ""; aIn.value = ""; xIn.value = "";
-          addBtn.disabled = false;
-        }).catch(function(err){
-          teacherPasscode = ""; // let them re-enter in case it was wrong
-          msg.style.color = "var(--danger)";
-          msg.textContent = (err && err.message) || "등록에 실패했어요. 선생님 암호를 확인해주세요.";
-          addBtn.disabled = false;
-        });
-      });
-    });
-    panel.appendChild(addBtn);
-    panel.appendChild(msg);
-
-    if(sharedPoems.length){
-      var list = el("div", {style:"margin-top:12px;"});
-      sharedPoems.forEach(function(p){
-        var isActive = p.id === activePoemId;
-        var row = el("div", {class:"poem-row"});
-        row.appendChild(el("span", {style:"flex:1; min-width:0;", html: (isActive ? "📢 " : "") + esc(p.title||"(제목 없음)") + " · " + esc(p.author||"작가 미상")}));
-        var btnGroup = el("div", {style:"display:flex; gap:6px; flex:none; align-items:center;"});
-        var broadcastBtn = el("button", {type:"button", class:"teacher-toggle", style:"margin-top:0; padding:5px 10px; font-size:11.5px;", html: isActive ? "🔄 다시 배포" : "📢 배포"});
-        broadcastBtn.addEventListener("click", function(){ setActivePoem(p); });
-        btnGroup.appendChild(broadcastBtn);
-        var delBtn = el("button", {type:"button", class:"remove-x", html:"✕"});
-        delBtn.addEventListener("click", function(){
-          showConfirm('"' + p.title + '" 시를 목록에서 삭제할까요?', function(){
-            ensureTeacherPasscode(function(){
-              deleteSharedPoem(p.id).catch(function(err){
-                teacherPasscode = "";
-                showAlert((err && err.message) || "삭제에 실패했어요. 선생님 암호를 확인해주세요.");
-              });
-            });
-          });
-        });
-        btnGroup.appendChild(delBtn);
-        row.appendChild(btnGroup);
-        list.appendChild(row);
-      });
-      panel.appendChild(list);
-    }
-    return panel;
   }
 
   function renderStep1(card){
@@ -2239,9 +2258,9 @@
   }
 
   /* ---------------- init ---------------- */
+  updateNameplate();
   renderAll();
   fetchPoems();
-  fetchActivePoem();
 })();
 </script>
 </body>
