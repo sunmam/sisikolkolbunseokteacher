@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="color-scheme" content="light only">
 <title>시시콜콜 분석하기 (교사용)</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -139,7 +140,8 @@
   .stepdot-door{ width: 13px; height: 17px; flex: none; overflow: visible; }
   .stepdot-door-frame{ fill: var(--door-frame); }
   .stepdot-door-panel{
-    fill: var(--door-wood); transition: transform 0.25s, fill 0.25s;
+    fill: color-mix(in srgb, var(--dot-c, var(--door-wood)) 55%, white);
+    transition: transform 0.25s, fill 0.25s;
     transform-origin: 3.5px 9px; transform-box: fill-box;
   }
   .stepdot-door-knob{ fill: #ffe9b0; }
@@ -157,7 +159,7 @@
     transform: translateY(-2px) rotate(-1deg); box-shadow: 3px 4px 0 var(--ink);
   }
   .stepdot.active .stepdot-label{ color: var(--accent); font-weight: 700; }
-  .stepdot.active .stepdot-door-panel{ transform: rotateY(-35deg); fill: var(--accent4); }
+  .stepdot.active .stepdot-door-panel{ transform: rotateY(-35deg); fill: var(--dot-c, var(--accent4)); }
 
   .progress-track{
     height: 8px; background: var(--card); border: 2px solid var(--ink); border-radius: 999px; margin-top: 12px; overflow: hidden;
@@ -799,6 +801,7 @@
       btn.type = "button";
       btn.className = "stepdot" + (active ? " active" : (started ? " done" : ""));
       btn.title = s.label;
+      btn.style.setProperty("--dot-c", STEP_ACCENTS[i % STEP_ACCENTS.length]);
 
       btn.appendChild(el("span", {html:
         '<svg class="stepdot-door" viewBox="0 0 20 24">' +
@@ -1851,10 +1854,11 @@
 
     var allSelected = getSelectedEmotions();
     if(allSelected.length){
-      allSelected.forEach(function(item){
-        var qb = el("div", {class:"quote-box"});
+      allSelected.forEach(function(item, idx){
+        var itemColor = STEP_ACCENTS[idx % STEP_ACCENTS.length];
+        var qb = el("div", {class:"quote-box", style:"border-color:" + itemColor + ";"});
         var qbLabel = el("div", {class:"qb-label"});
-        qbLabel.appendChild(el("span", {class:"swatch"}));
+        qbLabel.appendChild(el("span", {class:"swatch", style:"background:" + itemColor + ";"}));
         qbLabel.appendChild(textNode('"'));
         var labelSpan = el("span", {html: esc(item.label)});
         if(item.key === EMO_OTHER_KEY) labelSpan.setAttribute("data-emo-key", EMO_OTHER_KEY);
@@ -2103,10 +2107,11 @@
     block.appendChild(grid);
 
     var selected = getSelectedExpressions();
-    selected.forEach(function(item){
-      var qb = el("div", {class:"quote-box"});
+    selected.forEach(function(item, idx){
+      var itemColor = STEP_ACCENTS[idx % STEP_ACCENTS.length];
+      var qb = el("div", {class:"quote-box", style:"border-color:" + itemColor + ";"});
       var qbLabel = el("div", {class:"qb-label"});
-      qbLabel.appendChild(el("span", {class:"swatch"}));
+      qbLabel.appendChild(el("span", {class:"swatch", style:"background:" + itemColor + ";"}));
       qbLabel.appendChild(textNode('"'));
       var labelSpan = el("span", {html: esc(item.label)});
       if(item.key === EXPR_OTHER_KEY) labelSpan.setAttribute("data-expr-key", EXPR_OTHER_KEY);
