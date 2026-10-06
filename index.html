@@ -968,10 +968,9 @@
 
   var reportsRows = [];
   var reportsFolders = []; // 각 항목: {folderId, folderName, createdAt, deadline}
-  var selectedFolder = "__ALL__"; // "__ALL__" | "__NONE__" | 실제 폴더 이름
   var expandedFolders = {}; // folderId -> true면 반 카드가 펼쳐진 상태
-  var submissionsView = "list"; // "list" | "digest"
-  var digestPoemId = ""; // 모아보기에서 고른 시 (비면 가장 최근 제출된 시)
+  var expandedSubs = {}; // "<반키>:digest|list" -> true면 그 하위 항목이 펼쳐진 상태
+  var digestPoemByKey = {}; // 반키 -> 모아보기에서 고른 시 (없으면 가장 최근 제출된 시)
 
   function callReportsApi(payload){
     payload.passcode = teacherPasscode;
@@ -1018,23 +1017,6 @@
     return Math.round(scores.reduce(function(a,s){ return a + (s.value||0); }, 0) / scores.length);
   }
 
-  // 폴더별로 묶은 그룹 목록을 만듭니다. reportsFolders에 등록된 폴더는
-  // 제출물이 0개여도 자리를 유지하고(교사가 만든 순서 그대로), 등록되지
-  // 않은 폴더 이름이 실제 제출물에 있으면 그것도 자동으로 그룹에 포함됩니다.
-  function buildReportGroups(rows){
-    var groups = reportsFolders.map(function(f){ return { name:f.folderName, rows:[] }; });
-    var noFolderGroup = { name:"", rows:[] };
-    rows.forEach(function(r){
-      var fname = r.folderName || "";
-      if(!fname){ noFolderGroup.rows.push(r); return; }
-      var target = groups.filter(function(g){ return g.name === fname; })[0];
-      if(!target){ target = { name:fname, rows:[] }; groups.push(target); }
-      target.rows.push(r);
-    });
-    if(noFolderGroup.rows.length) groups.push(noFolderGroup);
-    return groups;
-  }
-
   /* ================= 교사 보드 (첫 화면) ================= */
 
   function renderTeacherBoard(){
@@ -1072,11 +1054,6 @@
     }
     board.appendChild(classCard);
 
-    if(boardUnlocked){
-      var subCard = el("div", {class:"card", style:"margin-top:16px;"});
-      subCard.appendChild(buildSubmissionsPanel());
-      board.appendChild(subCard);
-    }
   }
 
   function buildPoemRegisterPanel(){
@@ -1180,6 +1157,13 @@
     reportsFolders.forEach(function(f){
       wrap.appendChild(buildClassCard(f));
     });
+    var orphanCard = buildOrphanSubmissions();
+    if(orphanCard) wrap.appendChild(orphanCard);
+    if(reportsRows.length){
+      var allCsvBtn = el("button", {type:"button", class:"add-btn", style:"margin-top:10px;", html:"⬇️ 전체 반 제출 CSV로 내보내기"});
+      allCsvBtn.addEventListener("click", function(){ downloadReportsCsv(reportsRows, "전체"); });
+      wrap.appendChild(allCsvBtn);
+    }
     return wrap;
   }
 
@@ -1193,7 +1177,7 @@
     titleCol.appendChild(el("div", {style:"font-weight:700; font-size:13.5px;", html: (expanded?"▾":"▸") + " 🏫 " + esc(f.folderName)}));
     titleCol.appendChild(el("div", {
       class:"field-hint", style:"margin:3px 0 0;",
-      html: activePoem ? ("📢 " + esc(activePoem.title)) : "아직 배포한 시가 없어요"
+      html: (activePoem ? ("📢 " + esc(activePoem.title)) : "아직 배포한 시가 없어요") + " · 제출 " + classRows(f.folderName).length + "명"
     }));
     top.appendChild(titleCol);
     var delFolderBtn = el("button", {type:"button", class:"remove-x", html:"✕"});
@@ -1202,7 +1186,6 @@
       showConfirm('"' + f.folderName + '" 반을 목록에서 삭제할까요? (이미 제출된 학생 자료는 지워지지 않아요)', function(){
         callReportsApi({ action:"deleteFolder", folderId:f.folderId }).then(function(list){
           reportsFolders = Array.isArray(list) ? list : reportsFolders;
-          if(selectedFolder === f.folderName) selectedFolder = "__ALL__";
           delete expandedFolders[f.folderId];
           renderTeacherBoard();
         }).catch(function(err){
@@ -1322,6 +1305,64 @@
       card.appendChild(linkWrap);
     }
 
+    card.appendChild(buildClassSubmissions("f:" + f.folderId, classRows(f.folderName)));
+
+    return card;
+  }
+
+  function classRows(folderName){
+    return reportsRows.filter(function(r){ return (r.folderName||"") === folderName; });
+  }
+
+  // 반 카드 안의 하위 항목: 항목별 모아보기 / 학생별 제출 목록. 눌러서 펼칩니다.
+  function buildClassSubmissions(key, rows){
+    var wrap = el("div", {style:"margin-top:12px; padding-top:12px; border-top:1px dashed var(--line);"});
+    wrap.appendChild(el("div", {style:"font-weight:700; font-size:13px; margin-bottom:8px;", html:"📊 학생 제출 (" + rows.length + "명)"}));
+    if(!rows.length){
+      wrap.appendChild(el("div", {class:"field-hint", html:"아직 제출한 학생이 없어요."}));
+      return wrap;
+    }
+    [
+      { id:"digest", label:"🗂️ 항목별 모아보기", build:function(){ return buildDigestPanel(rows, key); } },
+      { id:"list", label:"📋 학생별 제출 목록 · CSV", build:function(){
+        var box = el("div", {});
+        var csvBtn = el("button", {type:"button", class:"add-btn", style:"margin-bottom:10px;", html:"⬇️ 이 반 CSV로 내보내기"});
+        csvBtn.addEventListener("click", function(){ downloadReportsCsv(rows, rows[0].folderName || "반없음"); });
+        box.appendChild(csvBtn);
+        box.appendChild(buildReportsTable(rows));
+        return box;
+      } }
+    ].forEach(function(sub){
+      var sk = key + ":" + sub.id;
+      var open = !!expandedSubs[sk];
+      var head = el("div", {class:"set-card-top", style:"cursor:pointer; margin-bottom:8px;"});
+      head.appendChild(el("div", {style:"font-weight:700; font-size:13px;", html:(open?"▾ ":"▸ ") + sub.label}));
+      head.addEventListener("click", function(){ expandedSubs[sk] = !open; renderTeacherBoard(); });
+      wrap.appendChild(head);
+      if(open) wrap.appendChild(sub.build());
+    });
+    return wrap;
+  }
+
+  // 반 목록에 없는 이름(옛 반, 지운 반, 반 없음)으로 제출된 자료도 놓치지 않게 따로 보여줍니다.
+  function buildOrphanSubmissions(){
+    var known = {};
+    reportsFolders.forEach(function(f){ known[f.folderName] = true; });
+    var orphanNames = [];
+    reportsRows.forEach(function(r){
+      var n = r.folderName || "";
+      if(!known[n] && orphanNames.indexOf(n) === -1) orphanNames.push(n);
+    });
+    if(!orphanNames.length) return null;
+    var card = el("div", {class:"set-card"});
+    card.appendChild(el("div", {style:"font-weight:700; font-size:13.5px;", html:"📄 반 목록에 없는 제출"}));
+    card.appendChild(el("div", {class:"field-hint", style:"margin:3px 0 0;", html:"지운 반이나 반 없이 제출된 자료예요."}));
+    orphanNames.forEach(function(n){
+      var rows = classRows(n);
+      var sec = buildClassSubmissions("o:" + n, rows);
+      sec.insertBefore(el("div", {style:"font-weight:700; font-size:13px; margin-bottom:6px;", html:"🏷️ " + (n ? esc(n) : "반 없음")}), sec.firstChild);
+      card.appendChild(sec);
+    });
     return card;
   }
 
@@ -1348,75 +1389,6 @@
     closeBtn.addEventListener("click", closeModal);
     modalBox.appendChild(closeBtn);
     openModal();
-  }
-
-  function buildSubmissionsPanel(){
-    var wrap = el("div", {});
-    var rows = reportsRows;
-    var groups = buildReportGroups(rows);
-    var visibleRows;
-    if(selectedFolder === "__ALL__") visibleRows = rows;
-    else if(selectedFolder === "__NONE__") visibleRows = rows.filter(function(r){ return !(r.folderName||""); });
-    else visibleRows = rows.filter(function(r){ return (r.folderName||"") === selectedFolder; });
-
-    var head = el("div", {style:"display:flex; justify-content:space-between; align-items:center; margin-bottom:12px; gap:8px; flex-wrap:wrap;"});
-    head.appendChild(el("h2", {class:"step-title", style:"margin:0;", html:"📋 학생 제출 현황 (" + rows.length + "명)"}));
-    var csvBtn = el("button", {type:"button", class:"add-btn", html: selectedFolder === "__ALL__" ? "⬇️ 전체 CSV로 내보내기" : "⬇️ 이 반만 CSV로 내보내기"});
-    csvBtn.addEventListener("click", function(){
-      var label = selectedFolder === "__ALL__" ? "전체" : (selectedFolder === "__NONE__" ? "반없음" : selectedFolder);
-      downloadReportsCsv(visibleRows, label);
-    });
-    head.appendChild(csvBtn);
-    wrap.appendChild(head);
-
-    if(!rows.length){
-      wrap.appendChild(el("div", {class:"field-hint", html:"아직 제출한 학생이 없어요."}));
-      return wrap;
-    }
-
-    // ---- 보기 필터 탭: 눌러서 그 반 내용만 아래에 표시 ----
-    var tabWrap = el("div", {class:"checkbox-grid", style:"margin-bottom:14px;"});
-    function makeTab(label, key, count){
-      var chip = el("span", {class:"chip" + (selectedFolder===key?" checked":""), style:"cursor:pointer;"});
-      chip.appendChild(textNode(label + " (" + count + ")"));
-      chip.addEventListener("click", function(){ selectedFolder = key; renderTeacherBoard(); });
-      return chip;
-    }
-    tabWrap.appendChild(makeTab("전체", "__ALL__", rows.length));
-    groups.forEach(function(g){
-      var key = g.name || "__NONE__";
-      tabWrap.appendChild(makeTab(g.name ? ("🏫 " + g.name) : "📄 반 없음", key, g.rows.length));
-    });
-    wrap.appendChild(tabWrap);
-
-    if(!visibleRows.length){
-      wrap.appendChild(el("div", {class:"field-hint", html:"이 반에는 표시할 제출물이 없어요."}));
-      return wrap;
-    }
-
-    var viewWrap = el("div", {class:"checkbox-grid", style:"margin-bottom:14px;"});
-    [["list","📋 제출 목록"],["digest","🗂️ 항목별 모아보기"]].forEach(function(v){
-      var chip = el("span", {class:"chip" + (submissionsView===v[0]?" checked":""), style:"cursor:pointer;"});
-      chip.appendChild(textNode(v[1]));
-      chip.addEventListener("click", function(){ submissionsView = v[0]; renderTeacherBoard(); });
-      viewWrap.appendChild(chip);
-    });
-    wrap.appendChild(viewWrap);
-    if(submissionsView === "digest"){
-      wrap.appendChild(buildDigestPanel(visibleRows));
-      return wrap;
-    }
-
-    if(selectedFolder === "__ALL__"){
-      groups.forEach(function(g){
-        if(!g.rows.length) return;
-        wrap.appendChild(el("h3", {style:"font-size:14px; margin:18px 0 8px;", html: g.name ? ("🏫 " + esc(g.name) + " (" + g.rows.length + "명)") : ("📄 반 없음 (" + g.rows.length + "명)")}));
-        wrap.appendChild(buildReportsTable(g.rows));
-      });
-    } else {
-      wrap.appendChild(buildReportsTable(visibleRows));
-    }
-    return wrap;
   }
 
   function buildReportsTable(rows){
@@ -1586,7 +1558,7 @@
     });
   }
 
-  function buildDigestPanel(rows){
+  function buildDigestPanel(rows, key){
     var wrap = el("div", {});
 
     // 같은 반이라도 시가 여러 편일 수 있어서, 한 번에 한 편씩만 모아봅니다.
@@ -1597,7 +1569,7 @@
       if((r.submittedAt||"") > poemMap[k].latest) poemMap[k].latest = r.submittedAt || "";
     });
     poemOrder.sort(function(a,b){ return a.latest < b.latest ? 1 : -1; });
-    if(!poemMap[digestPoemId]) digestPoemId = poemOrder[0].key;
+    var digestPoemId = poemMap[digestPoemByKey[key]] ? digestPoemByKey[key] : poemOrder[0].key;
     if(poemOrder.length > 1){
       var sel = el("select", {style:"margin-bottom:12px;"});
       poemOrder.forEach(function(p){
@@ -1605,7 +1577,7 @@
         if(p.key === digestPoemId) o.selected = true;
         sel.appendChild(o);
       });
-      sel.addEventListener("change", function(){ digestPoemId = this.value; renderTeacherBoard(); });
+      sel.addEventListener("change", function(){ digestPoemByKey[key] = this.value; renderTeacherBoard(); });
       wrap.appendChild(sel);
     }
     var pr = rows.filter(function(r){ return (r.poemId || r.poemTitle || "") === digestPoemId; });
