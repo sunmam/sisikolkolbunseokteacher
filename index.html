@@ -475,6 +475,32 @@
     border: 2px dashed var(--line); padding: 14px; border-radius: 12px; margin: 6px 0 14px;
   }
 
+  .digest-sec{
+    background: var(--card); border: 2.5px solid var(--ink); border-left-width: 9px; border-left-color: var(--sec-c, var(--accent));
+    border-radius: 14px; padding: 12px 14px; margin-bottom: 14px; box-shadow: 3px 4px 0 var(--ink);
+  }
+  .digest-sec h3{ font-family:'Jua',sans-serif; font-weight:400; font-size:15px; margin:0 0 4px; }
+  .digest-sec .digest-hint{ font-size:11.5px; color:var(--ink-soft); margin-bottom:8px; }
+  .digest-row{
+    display:flex; gap:8px; align-items:flex-start; justify-content:space-between;
+    padding:7px 0; border-top:1px dashed var(--line); font-size:13px; line-height:1.55;
+  }
+  .digest-row:first-of-type{ border-top:none; }
+  .digest-main{ flex:1; min-width:0; word-break:break-word; }
+  .digest-sub{ font-size:11.5px; color:var(--ink-soft); }
+  .digest-name{
+    flex:none; border:2px solid var(--ink); border-radius:999px; background:var(--bg-soft);
+    font-size:11.5px; padding:2px 9px; cursor:pointer; font-family:'Jua',sans-serif; box-shadow:1px 2px 0 var(--ink);
+  }
+  .digest-name.shown{ background: color-mix(in srgb, var(--sec-c, var(--accent)) 25%, white); }
+  .digest-group{ border-top:1px dashed var(--line); padding:6px 0; }
+  .digest-group:first-of-type{ border-top:none; }
+  .digest-group summary{ cursor:pointer; font-size:13.5px; display:flex; align-items:center; gap:8px; }
+  .digest-group summary b{ font-family:'Jua',sans-serif; font-weight:400; }
+  .digest-bar{ flex:1; height:9px; border:1.5px solid var(--ink); border-radius:999px; background:var(--card); overflow:hidden; min-width:40px; }
+  .digest-bar i{ display:block; height:100%; background: var(--sec-c, var(--accent)); }
+  .digest-group .digest-row{ padding-left:14px; }
+
   @media print{
     header.top, .stepbar, .foot-nav, .step-guide, .reset-btn{ display:none !important; }
     body{ padding:0; }
@@ -944,6 +970,8 @@
   var reportsFolders = []; // 각 항목: {folderId, folderName, createdAt, deadline}
   var selectedFolder = "__ALL__"; // "__ALL__" | "__NONE__" | 실제 폴더 이름
   var expandedFolders = {}; // folderId -> true면 반 카드가 펼쳐진 상태
+  var submissionsView = "list"; // "list" | "digest"
+  var digestPoemId = ""; // 모아보기에서 고른 시 (비면 가장 최근 제출된 시)
 
   function callReportsApi(payload){
     payload.passcode = teacherPasscode;
@@ -1366,6 +1394,19 @@
       return wrap;
     }
 
+    var viewWrap = el("div", {class:"checkbox-grid", style:"margin-bottom:14px;"});
+    [["list","📋 제출 목록"],["digest","🗂️ 항목별 모아보기"]].forEach(function(v){
+      var chip = el("span", {class:"chip" + (submissionsView===v[0]?" checked":""), style:"cursor:pointer;"});
+      chip.appendChild(textNode(v[1]));
+      chip.addEventListener("click", function(){ submissionsView = v[0]; renderTeacherBoard(); });
+      viewWrap.appendChild(chip);
+    });
+    wrap.appendChild(viewWrap);
+    if(submissionsView === "digest"){
+      wrap.appendChild(buildDigestPanel(visibleRows));
+      return wrap;
+    }
+
     if(selectedFolder === "__ALL__"){
       groups.forEach(function(g){
         if(!g.rows.length) return;
@@ -1441,6 +1482,236 @@
     });
     table.appendChild(tbody);
     return table;
+  }
+
+  /* ---------------- 항목별 모아보기 ---------------- */
+
+  function parseReportData(r){
+    if(r.dataJson){
+      try{ var d = JSON.parse(r.dataJson); if(d && typeof d === "object") return d; }catch(e){ /* 아래 예전 방식으로 */ }
+    }
+    return parseLegacyReport(r.reportText);
+  }
+
+  // dataJson이 없던 예전 제출물은, 학생 앱이 만든 정해진 문장 틀에서 값을 다시 뽑아냅니다.
+  function parseLegacyReport(text){
+    text = String(text||"");
+    var starts = ["작품명:", "나는 시를 읽는 순간 ", "나는 이 시에서 ", "이 시에서 느낀 ", "이 시의 시적 화자는 ", "작가는 시어 ",
+      "특히 내가 ", "수사적 장치 ", "나는 이 시가 ", "다른 시각으로 보면 ", "이 시와 관련해서 "];
+    var lines = [];
+    var raw = text.split(/\r?\n/);
+    for(var i=0;i<raw.length;i++){
+      if(raw[i].indexOf("[나의 감상 완성도]") === 0) break;
+      var isStart = starts.some(function(s){ return raw[i].indexOf(s) === 0; });
+      if(isStart || !lines.length) lines.push(raw[i]);
+      else if(raw[i] !== "" || lines[lines.length-1] !== "") lines[lines.length-1] += "\n" + raw[i]; // 학생이 줄바꿈을 쓴 경우
+    }
+    lines = lines.map(function(ln){ return ln.replace(/\s+$/, ""); });
+    function clean(s){ s = String(s||"").trim(); return /^_+$/.test(s) ? "" : s; }
+    var d = { app:"", emotions:[], speaker:"", words:[], phrases:[], expressions:[], theme:"", other:"", question:"", legacy:true };
+    var levels = {}, found = false, m;
+    lines.forEach(function(ln){
+      if((m = ln.match(/^나는 시를 읽는 순간 시구 ([\s\S]*)에서 (.*?) 정서를 느꼈다\.$/))){
+        d.app = "bunseok";
+        if(clean(m[2])){ d.emotions.push({ label:clean(m[2]), level:0, quote:clean(m[1]) }); found = true; }
+      } else if((m = ln.match(/^나는 이 시에서 (.*?) 정서를 느꼈다\.$/))){
+        d.app = "gamsang";
+        if(clean(m[1])){ d.emotions.push({ label:clean(m[1]), level:0, quote:"" }); found = true; }
+      } else if((m = ln.match(/^이 시에서 느낀 정서별 강도는 ([\s\S]*)이다\.$/))){
+        var re = /(?:^|, )(.+?)\(강도 (\d)\)/g, mm;
+        while((mm = re.exec(m[1]))) levels[mm[1].trim()] = parseInt(mm[2], 10);
+      } else if((m = ln.match(/^이 시의 시적 화자는 ([\s\S]*)\.$/))){
+        d.speaker = clean(m[1]);
+      } else if((m = ln.match(/^작가는 시어 ([\s\S]*)을\(를\) 통해, ([\s\S]*) 의미를 함축적으로 전달한다고 생각한다\.$/))){
+        if(clean(m[1])) d.words.push({ text:clean(m[1]), reason:clean(m[2]) });
+      } else if((m = ln.match(/^특히 내가 (?:미적 느낌을 받고 감탄한 시구는|의미 있거나 미적 느낌을 받고 감탄한 시어·시구는) ([\s\S]*)이다\. 그 이유는 ([\s\S]*)이다\.$/))){
+        if(clean(m[1])) d.phrases.push({ text:clean(m[1]), reason:clean(m[2]) });
+      } else if((m = ln.match(/^수사적 장치 (.*?)을\(를\) 통해 시적 감동을 더한 부분은 ([\s\S]*)이다\.$/))){
+        if(clean(m[1])) d.expressions.push({ label:clean(m[1]), quote:clean(m[2]) });
+      } else if((m = ln.match(/^나는 이 시가 ([\s\S]*)에 대해 이야기한다고 생각한다\.$/))){
+        d.theme = clean(m[1]);
+      } else if((m = ln.match(/^다른 시각으로 보면 ([\s\S]*)\(이\)라고도 볼 수 있다\.$/))){
+        d.other = clean(m[1]);
+      } else if((m = ln.match(/^이 시와 관련해서 더 나누고 싶은 질문은, ([\s\S]*)이다\.$/))){
+        d.question = clean(m[1]);
+      }
+    });
+    d.emotions.forEach(function(e){ e.level = levels[e.label] || 0; });
+    return (found || d.speaker || d.words.length || d.phrases.length || d.expressions.length || d.theme || d.other || d.question) ? d : null;
+  }
+
+  function recitationScore(r){
+    var scores; try{ scores = JSON.parse(r.scoresJson||"[]"); }catch(e){ scores = []; }
+    var hit = scores.filter(function(s){ return s.label === "낭송의 매력도"; })[0];
+    return hit ? { value: hit.value||0, reason: hit.reason||"" } : null;
+  }
+
+  // 이름은 평소엔 가려두고, 버튼을 눌러야 보이게 합니다.
+  function digestNameBtn(r){
+    var label = (r.realName||"이름 없음") + (r.nickname ? " (" + r.nickname + "콜콜이)" : "");
+    var btn = el("button", {type:"button", class:"digest-name", title:"눌러서 이름 보기/가리기"});
+    btn.textContent = "🙈 이름";
+    var shown = false;
+    btn.addEventListener("click", function(){
+      shown = !shown;
+      btn.textContent = shown ? label : "🙈 이름";
+      btn.classList.toggle("shown", shown);
+    });
+    return btn;
+  }
+
+  function digestRow(mainHtml, r, subHtml){
+    var row = el("div", {class:"digest-row"});
+    var main = el("div", {class:"digest-main", html: mainHtml});
+    if(subHtml) main.appendChild(el("div", {class:"digest-sub", html: subHtml}));
+    row.appendChild(main);
+    row.appendChild(digestNameBtn(r));
+    return row;
+  }
+
+  // groups: [{ title, rows:[{html, sub, r}], barValue, barMax, meta }]
+  function digestGroups(sec, groups){
+    var max = Math.max.apply(null, groups.map(function(g){ return g.barValue; }).concat([1]));
+    groups.forEach(function(g){
+      var d = el("details", {class:"digest-group"});
+      var sum = el("summary", {});
+      sum.appendChild(el("b", {html: esc(g.title)}));
+      sum.appendChild(el("span", {class:"digest-sub", html: esc(g.meta)}));
+      var bar = el("div", {class:"digest-bar"});
+      bar.appendChild(el("i", {style:"width:" + Math.round(g.barValue / max * 100) + "%"}));
+      sum.appendChild(bar);
+      d.appendChild(sum);
+      g.rows.forEach(function(x){ d.appendChild(digestRow(x.html, x.r, x.sub)); });
+      sec.appendChild(d);
+    });
+  }
+
+  function buildDigestPanel(rows){
+    var wrap = el("div", {});
+
+    // 같은 반이라도 시가 여러 편일 수 있어서, 한 번에 한 편씩만 모아봅니다.
+    var poemMap = {}, poemOrder = [];
+    rows.forEach(function(r){
+      var k = r.poemId || r.poemTitle || "";
+      if(!poemMap[k]){ poemMap[k] = { key:k, title:r.poemTitle || "(제목 없음)", latest:"" }; poemOrder.push(poemMap[k]); }
+      if((r.submittedAt||"") > poemMap[k].latest) poemMap[k].latest = r.submittedAt || "";
+    });
+    poemOrder.sort(function(a,b){ return a.latest < b.latest ? 1 : -1; });
+    if(!poemMap[digestPoemId]) digestPoemId = poemOrder[0].key;
+    if(poemOrder.length > 1){
+      var sel = el("select", {style:"margin-bottom:12px;"});
+      poemOrder.forEach(function(p){
+        var o = el("option", {value:p.key}); o.textContent = "📖 " + p.title;
+        if(p.key === digestPoemId) o.selected = true;
+        sel.appendChild(o);
+      });
+      sel.addEventListener("change", function(){ digestPoemId = this.value; renderTeacherBoard(); });
+      wrap.appendChild(sel);
+    }
+    var pr = rows.filter(function(r){ return (r.poemId || r.poemTitle || "") === digestPoemId; });
+    var items = pr.map(function(r){ return { r:r, d:parseReportData(r) }; });
+    var withData = items.filter(function(x){ return x.d; });
+
+    wrap.appendChild(el("div", {class:"field-hint", style:"margin-bottom:12px;", html:"🙈 이름은 가려져 있어요. 각 내용 옆의 <b>이름</b> 버튼을 누르면 보여요. (" + pr.length + "명 제출)"}));
+    var legacyCount = withData.filter(function(x){ return x.d.legacy; }).length;
+    if(legacyCount){
+      wrap.appendChild(el("div", {class:"field-hint", style:"margin-bottom:12px;", html:"ℹ️ " + legacyCount + "명은 예전 방식으로 제출해서 보고서 글에서 항목을 읽어 모았어요. 학생이 '제출하기'를 다시 누르면 더 정확해져요."}));
+    }
+    if(withData.length < pr.length){
+      wrap.appendChild(el("div", {class:"field-hint", style:"margin-bottom:12px; color:var(--danger);", html:"⚠️ " + (pr.length - withData.length) + "명은 제출 내용에서 항목을 읽지 못해 낭송 외에는 모이지 않았어요."}));
+    }
+
+    var secIdx = 0;
+    function section(title, hint){
+      var s = el("div", {class:"digest-sec", style:"--sec-c:" + STEP_ACCENTS[secIdx++ % STEP_ACCENTS.length] + ";"});
+      s.appendChild(el("h3", {html: title}));
+      if(hint) s.appendChild(el("div", {class:"digest-hint", html: hint}));
+      wrap.appendChild(s);
+      return s;
+    }
+    function empty(sec){ sec.appendChild(el("div", {class:"field-hint", html:"아직 모인 내용이 없어요."})); }
+
+    // 1. 낭송 매력도 (높은 순)
+    var s1 = section("🎤 1. 낭송 매력도", "매력도 점수가 높은 순서예요.");
+    var rec = pr.map(function(r){ return { r:r, s:recitationScore(r) }; }).filter(function(x){ return x.s; });
+    rec.sort(function(a,b){ return b.s.value - a.s.value; });
+    if(!rec.length) empty(s1);
+    rec.forEach(function(x){ s1.appendChild(digestRow("<b>" + x.s.value + "점</b>", x.r, esc(x.s.reason))); });
+
+    // 2·3. 정서
+    var emoMap = {};
+    withData.forEach(function(x){
+      (x.d.emotions||[]).forEach(function(e){
+        if(!e.label) return;
+        (emoMap[e.label] = emoMap[e.label] || []).push({ r:x.r, level:e.level||0, quote:e.quote||"" });
+      });
+    });
+    var emoNames = Object.keys(emoMap);
+
+    var s2 = section("💗 2. 많이 선택한 정서", "고른 학생 수가 많은 정서부터 보여요. 눌러서 펼치면 학생별 시구가 나와요.");
+    if(!emoNames.length) empty(s2);
+    digestGroups(s2, emoNames.map(function(n){
+      var list = emoMap[n];
+      return { title:n, meta:list.length + "명", barValue:list.length, rows: list.map(function(e){
+        return { r:e.r, html: e.quote ? "“" + esc(e.quote) + "”" : "<span class='digest-sub'>(시구 없음)</span>", sub: e.level ? "강도 " + e.level : "" };
+      }) };
+    }).sort(function(a,b){ return b.barValue - a.barValue; }));
+
+    var s3 = section("📈 3. 강도를 반영한 정서", "학생들이 매긴 강도(1~5점)를 모두 더한 점수가 큰 정서부터예요.");
+    if(!emoNames.length) empty(s3);
+    digestGroups(s3, emoNames.map(function(n){
+      var list = emoMap[n].slice().sort(function(a,b){ return b.level - a.level; });
+      var total = list.reduce(function(a,e){ return a + e.level; }, 0);
+      var rated = list.filter(function(e){ return e.level; }).length;
+      return { title:n, meta:"합계 " + total + "점 · 평균 " + (rated ? (total/rated).toFixed(1) : "-") + " · " + list.length + "명", barValue:total, rows: list.map(function(e){
+        return { r:e.r, html: e.level ? "강도 <b>" + e.level + "</b>" : "<span class='digest-sub'>(강도 미입력)</span>", sub: e.quote ? "“" + esc(e.quote) + "”" : "" };
+      }) };
+    }).sort(function(a,b){ return b.barValue - a.barValue; }));
+
+    // 4. 화자의 상황
+    var s4 = section("🗣️ 4. 화자의 상황");
+    var sp = withData.filter(function(x){ return x.d.speaker; });
+    if(!sp.length) empty(s4);
+    sp.forEach(function(x){ s4.appendChild(digestRow(esc(x.d.speaker), x.r)); });
+
+    // 5. 시어·시구와 이유
+    var s5 = section("✨ 5. 의미 있거나 미적 느낌을 받은 시어·시구와 그 이유");
+    var any5 = false;
+    withData.forEach(function(x){
+      (x.d.words||[]).forEach(function(w){ any5 = true; s5.appendChild(digestRow("<b>" + esc(w.text) + "</b>", x.r, w.reason ? "의미: " + esc(w.reason) : "")); });
+      (x.d.phrases||[]).forEach(function(p){ any5 = true; s5.appendChild(digestRow("<b>“" + esc(p.text) + "”</b>", x.r, p.reason ? "이유: " + esc(p.reason) : "")); });
+    });
+    if(!any5) empty(s5);
+
+    // 6. 표현법과 어구
+    var exMap = {};
+    withData.forEach(function(x){
+      (x.d.expressions||[]).forEach(function(e){ (exMap[e.label] = exMap[e.label] || []).push({ r:x.r, quote:e.quote||"" }); });
+    });
+    var exNames = Object.keys(exMap);
+    var s6 = section("🎨 6. 표현법과 해당 어구", "표현법을 고른 학생이 많은 순서예요. (분석하기 앱에서만 모여요)");
+    if(!exNames.length) empty(s6);
+    digestGroups(s6, exNames.map(function(n){
+      return { title:n, meta:exMap[n].length + "명", barValue:exMap[n].length, rows: exMap[n].map(function(e){
+        return { r:e.r, html: e.quote ? "“" + esc(e.quote) + "”" : "<span class='digest-sub'>(어구 없음)</span>" };
+      }) };
+    }).sort(function(a,b){ return b.barValue - a.barValue; }));
+
+    // 7. 주제
+    var s7 = section("💡 7. 주제");
+    var th = withData.filter(function(x){ return x.d.theme || x.d.other; });
+    if(!th.length) empty(s7);
+    th.forEach(function(x){
+      s7.appendChild(digestRow(x.d.theme ? esc(x.d.theme) : "<span class='digest-sub'>(주제 미입력)</span>", x.r, x.d.other ? "다른 해석: " + esc(x.d.other) : ""));
+    });
+
+    // 8. 질문
+    var s8 = section("❓ 8. 더 나누고 싶은 질문");
+    var qs = withData.filter(function(x){ return x.d.question; });
+    if(!qs.length) empty(s8);
+    qs.forEach(function(x){ s8.appendChild(digestRow(esc(x.d.question), x.r)); });
+
+    return wrap;
   }
 
   function csvCell(v){
